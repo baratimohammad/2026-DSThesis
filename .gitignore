@@ -7,3 +7,4 @@ logs/
 PhDStudenti/target/
 PhDStudenti/dbt_packages/
 PhDStudenti/logs/
+**/Prototype.ipynb
