@@ -1,0 +1,43 @@
+version: 2
+
+models:
+  - name: student_publications
+    columns:
+      - name: matricola
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('students')
+                field: matricola_dottorando
+
+      - name: titolo
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('publications')
+                field: titolo
+
+      - name: punteggio
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "punteggio is null or punteggio >= 0"
+
+      - name: grado_proprieta
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "grado_proprieta is null or (grado_proprieta between 0 and 100)"
+
+      - name: grado_proprieta_dottorandi
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "grado_proprieta_dottorandi is null or (grado_proprieta_dottorandi between 0 and 100)"
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: ['matricola', 'titolo']

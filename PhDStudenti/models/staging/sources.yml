@@ -1,0 +1,19 @@
+version: 2
+
+sources:
+  - name: staging
+    schema: staging
+    tables:
+      - name: students
+      - name: pubblicazioni
+      - name: attivita_formative_esterne
+      - name: attivita_formative_fuorisede
+      - name: attivita_formative_interne
+      - name: corsi
+      - name: dettaglio_corso
+      - name: journal_details
+      - name: ore_formazione
+      - name: stat_pubb
+      - name: collaborazioni_dettaglio
+      - name: filtered_iu_stats
+      - name: mobilita_internazionale_con_studenti

@@ -1,0 +1,23 @@
+version: 2
+
+models:
+  - name: attivita_interne
+    description: "Internal training activities for students (core). Anno is derived from data_esame."
+    columns:
+      - name: id
+        tests:
+          - not_null
+          - unique
+
+      - name: matricola
+        tests:
+          - not_null
+          - relationships:
+              to: ref('students')
+              field: matricola_dottorando
+
+      - name: cod_ins
+        tests:
+          - not_null:
+              config:
+                severity: warn

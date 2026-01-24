@@ -1,0 +1,24 @@
+version: 2
+
+models:
+  - name: students_courses
+    description: "Student-course enrollment/association (one row per cod_ins+anno+matricola)."
+    columns:
+      - name: cod_ins
+        tests:
+          - not_null
+
+      - name: anno
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: "anno between 1990 and extract(year from current_date)::int + 1"
+              config:
+                severity: warn
+
+      - name: matricola
+        tests:
+          - not_null
+          - relationships:
+              to: ref('students')
+              field: matricola_dottorando

@@ -1,0 +1,12 @@
+version: 2
+
+models:
+  - name: course_details
+    description: "Course details (one row per cod_ins + anno)."
+    columns:
+      - name: cod_ins
+        tests:
+          - not_null
+      - name: anno
+        tests:
+          - not_null

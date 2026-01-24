@@ -1,0 +1,25 @@
+version: 2
+
+models:
+  - name: attivita_fuori_sede
+    description: "External mobility/away activities for students (core)."
+    columns:
+      - name: id
+        tests:
+          - not_null
+          - unique
+
+      - name: matricola
+        tests:
+          - not_null
+          - relationships:
+              to: ref('students')
+              field: matricola_dottorando
+      - name: data_autorizzazione
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: >
+                data_autorizzazione is null
+                or extract(year from data_autorizzazione) between 2000 and extract(year from current_date) + 1
+              config:
+                severity: warn

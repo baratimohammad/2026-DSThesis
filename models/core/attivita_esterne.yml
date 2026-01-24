@@ -1,0 +1,17 @@
+version: 2
+
+models:
+  - name: attivita_esterne
+    description: "External training activities for PhD students (core)."
+    columns:
+      - name: id
+        tests:
+          - not_null
+          - unique
+
+      - name: matricola
+        tests:
+          - not_null
+          - relationships:
+              to: ref('students')
+              field: matricola_dottorando

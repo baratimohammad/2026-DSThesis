@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: students
+    description: "Core students dimension (one row per matricola_dottorando)."
+    columns:
+      - name: matricola_dottorando
+        description: "Primary key."
+        tests: [not_null, unique]
+
+      - name: ore_soft_skills
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: "ore_soft_skills is null or ore_soft_skills >= 0"
+
+      - name: ore_hard_skills
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: "ore_hard_skills is null or ore_hard_skills >= 0"
+

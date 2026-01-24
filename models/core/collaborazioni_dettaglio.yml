@@ -1,0 +1,17 @@
+version: 2
+
+models:
+  - name: collaborazioni_dettaglio
+    description: "Collaboration activity details for students (core)."
+    columns:
+      - name: id
+        tests:
+          - not_null
+          - unique
+
+      - name: matricola
+        tests:
+          - not_null
+          - relationships:
+              to: ref('students')
+              field: matricola_dottorando
