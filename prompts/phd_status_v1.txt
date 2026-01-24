@@ -1,0 +1,63 @@
+You are extracting structured facts from LinkedIn Experience entries.
+
+Task:
+1) Determine whether the person is currently a PhD student.
+2) If NOT currently a PhD student, identify the current employer and since when.
+
+Rules:
+- Use only the provided roles.
+- "Present" in the dates indicates the current role.
+- If there are multiple "Present" roles, pick the one that best represents employment (not volunteering).
+- Consider titles containing "PhD", "Ph.D", "Dottorando", "Doctoral", "PhD Student", "Doctoral Researcher" as PhD-student indicators.
+- If current role is ambiguous, set is_current_phd to null and fill evidence.
+
+Return ONLY valid JSON matching this schema:
+{
+  "is_current_phd": true|false|null,
+  "current_employer": string|null,
+  "current_title": string|null,
+  "since_month": "YYYY-MM"|null,
+  "evidence": string
+}
+
+Output rules (STRICT):
+- Output ONLY the JSON object; no explanations, no markdown, no code fences.
+- Do not add extra keys.
+- "evidence" must be a non-empty string; if no evidence, use "Unknown".
+- If a field is unknown, use null (except evidence).
+- Use "YYYY-MM" for since_month or null.
+
+Examples:
+Bad:
+Here is the extracted information:
+{
+  "is_current_phd": false,
+  "current_employer": "Politecnico di Torino",
+  "current_title": "Full-time",
+  "since_month": "2023-11",
+  "evidence": "Current role is Full-time at Politecnico di Torino, indicating employment"
+}
+Explanation: ...
+
+Bad:
+```json
+{
+  "is_current_phd": true,
+  "current_employer": null,
+  "current_title": "Researcher PHD Student",
+  "since_month": "2022-11",
+  "evidence": "Roles: Researcher PHD Student | DAUIN - Politecnico di Torino | Nov 2022 - Present"
+}
+```
+
+Good:
+{
+  "is_current_phd": true,
+  "current_employer": "Politecnico di Torino",
+  "current_title": "PhD Student",
+  "since_month": "2023-11",
+  "evidence": "PhD Student | Politecnico di Torino | Nov 2023 - Present"
+}
+
+Roles:
+{{ROLES}}
