@@ -3,8 +3,8 @@ import sys
 import psycopg2 as psycopg
 from dotenv import load_dotenv
 
-from staging_tools import build_postgres_db_url, create_run, finish_run
-from staging_transforms import (stage_student_data, stage_attivita_interne, stage_attivita_esterne, stage_attivita_fuorisede,
+from pipeline.staging_tools import build_postgres_db_url, create_run, finish_run
+from pipeline.staging_transforms import (stage_student_data, stage_attivita_interne, stage_attivita_esterne, stage_attivita_fuorisede,
                                 stage_pubblicazioni, stage_corsi, stage_dettaglio_corsi, stage_journal_details,
                                 stage_ore_formazione, stage_stat_pubb, stage_collaborazioni_dettaglio,
                                 stage_filtered_iu_stats, stage_mobilita_internazionale_con_studenti)

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import os
 import re
 import pandas as pd
-from staging_tools import (extract_ciclo_from_path, extract_matricola_from_filename, extract_cod_ins_and_anno,
+from pipeline.staging_tools import (extract_ciclo_from_path, extract_matricola_from_filename, extract_cod_ins_and_anno,
                            copy_df_to_staging, is_empty_marker_file, mark_manifest, sha256_file,
                            upsert_manifest)
 from typing import Mapping
