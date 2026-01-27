@@ -18,6 +18,18 @@ services:
       timeout: 3s
       retries: 20
   
+  dbt:
+    image: ghcr.io/dbt-labs/dbt-postgres:1.8.2
+    container_name: dbt
+    working_dir: /usr/app
+    env_file: .env
+    volumes:
+      - ./PhDStudenti:/usr/app
+      - ./PhDStudenti/.dbt:/root/.dbt
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   grafana:
     image: grafana/grafana:latest
     container_name: grafana
@@ -31,8 +43,8 @@ services:
       - "${GRAFANA_PORT:-3000}:3000"
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./docker/grafana/provisioning:/etc/grafana/provisioning
-      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./Docker/grafana/provisioning:/etc/grafana/provisioning
+      - ./Docker/grafana/dashboards:/var/lib/grafana/dashboards
     depends_on:
       postgres:
         condition: service_healthy

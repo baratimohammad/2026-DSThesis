@@ -8,3 +8,6 @@ PhDStudenti/target/
 PhDStudenti/dbt_packages/
 PhDStudenti/logs/
 **/Prototype.ipynb
+PhDStudenti/.dbt/
+.DS_Store
+PhDStudenti/package-lock.yml

@@ -4,24 +4,29 @@ import json
 import hashlib
 import re
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 import psycopg2
 from psycopg2 import errors as pg_errors
 import requests
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from dotenv import load_dotenv
-from staging_tools import build_postgres_db_url
+
+from pipeline.staging_tools import build_postgres_db_url
 
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-MODEL = "llama3.1:8b-instruct-q4_0"  # small/fast q4 model :contentReference[oaicite:3]{index=3}
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
+MODEL = "llama3.1:8b-instruct-q4_0"
 PROMPT_VERSION = "phd_status_v1"
 OLLAMA_TIMEOUT_SEC = int(os.getenv("OLLAMA_TIMEOUT_SEC", "240"))
 OLLAMA_MAX_RETRIES = int(os.getenv("OLLAMA_MAX_RETRIES", "2"))
 
+# How many times to retry a doc whose LLM call failed OR produced invalid output
+MAX_DOC_ATTEMPTS = int(os.getenv("MAX_DOC_ATTEMPTS", "3"))
+
 
 class PhDStatus(BaseModel):
+    # NOTE: keep Optional here so parsing can succeed, but we will enforce non-null before DB insert.
     is_current_phd: Optional[bool] = Field(default=None)
     current_employer: Optional[str] = None
     current_title: Optional[str] = None
@@ -47,7 +52,8 @@ def create_run(cur) -> str:
 def finish_run(cur, run_id: str, status: str, error: Optional[str] = None):
     cur.execute(
         """
-        UPDATE etl.runs SET status=%s, finished_at=now(), error_message=%s
+        UPDATE etl.runs
+        SET status=%s, finished_at=now(), error_message=%s
         WHERE run_id=%s
         """,
         (status, error, run_id),
@@ -55,7 +61,7 @@ def finish_run(cur, run_id: str, status: str, error: Optional[str] = None):
 
 
 def get_prompt_template() -> str:
-    path = os.path.join("prompts", "phd_status_v1.txt")
+    path = os.path.join("prompts", f"{PROMPT_VERSION}.txt")
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
@@ -76,22 +82,18 @@ def extract_json_candidate(text: str) -> str:
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end != -1 and end > start:
-        return text[start:end + 1].strip()
+        return text[start : end + 1].strip()
     return text.strip()
 
 
 def ollama_chat(model: str, prompt: str) -> str:
-    # /api/chat is documented by Ollama library page :contentReference[oaicite:4]{index=4}
     payload = {
         "model": model,
-        "messages": [
-            {"role": "user", "content": prompt}
-        ],
+        "messages": [{"role": "user", "content": prompt}],
         "stream": False,
-        "options": {
-            "temperature": 0.0
-        }
+        "options": {"temperature": 0.0},
     }
+
     last_error: Optional[Exception] = None
     for attempt in range(1, OLLAMA_MAX_RETRIES + 1):
         try:
@@ -109,19 +111,129 @@ def ollama_chat(model: str, prompt: str) -> str:
                 print(f"Ollama call failed (attempt {attempt}/{OLLAMA_MAX_RETRIES}): {e}")
             else:
                 print(f"Ollama call failed (attempt {attempt}/{OLLAMA_MAX_RETRIES}), giving up: {e}")
+
     raise last_error if last_error is not None else RuntimeError("Ollama call failed")
 
 
+def count_attempts(cur, document_id: str) -> int:
+    """
+    Counts attempts for this doc for the same model+prompt_version, including:
+      - status='FAILED'
+      - status='SUCCESS' but validated=false (schema-noncompliant output)
+    """
+    cur.execute(
+        """
+        SELECT count(*)
+        FROM etl.llm_calls c
+        WHERE c.document_id = %s
+          AND c.model = %s
+          AND c.prompt_version = %s
+          AND (c.status = 'FAILED' OR (c.status = 'SUCCESS' AND c.validated = false))
+        """,
+        (document_id, MODEL, PROMPT_VERSION),
+    )
+    return int(cur.fetchone()[0])
+
+
+def select_documents(cur) -> List[str]:
+    """
+    Documents to process:
+      - PARSED
+      - NEEDS_REVIEW
+      - FAILED but only if attempts < MAX_DOC_ATTEMPTS
+    """
+    cur.execute(
+        """
+        SELECT d.document_id
+        FROM etl.documents d
+        WHERE d.status IN ('PARSED', 'NEEDS_REVIEW')
+           OR (
+                d.status = 'FAILED'
+                AND (
+                    SELECT count(*)
+                    FROM etl.llm_calls c
+                    WHERE c.document_id = d.document_id
+                      AND c.model = %s
+                      AND c.prompt_version = %s
+                      AND (c.status = 'FAILED' OR (c.status='SUCCESS' AND c.validated=false))
+                ) < %s
+           )
+        ORDER BY d.ingested_at DESC
+        """,
+        (MODEL, PROMPT_VERSION, MAX_DOC_ATTEMPTS),
+    )
+    return [row[0] for row in cur.fetchall()]
+
+
+def upsert_llm_call(
+    cur,
+    *,
+    run_id: str,
+    document_id: str,
+    input_hash: str,
+    started: datetime,
+    ended: datetime,
+    latency_ms: int,
+    response_text: Optional[str],
+    response_json: Optional[dict],
+    validated: bool,
+    validation_errors: Optional[str],
+    status: str,
+    error_message: Optional[str],
+) -> str:
+    cur.execute(
+        """
+        INSERT INTO etl.llm_calls(
+          run_id, document_id, model, prompt_version, input_hash_sha256,
+          parameters, status, started_at, ended_at, latency_ms,
+          response_text, response_json, validated, validation_errors, error_message
+        )
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ON CONFLICT (document_id, model, prompt_version, input_hash_sha256)
+        DO UPDATE SET
+          run_id = EXCLUDED.run_id,
+          parameters = EXCLUDED.parameters,
+          status = EXCLUDED.status,
+          started_at = EXCLUDED.started_at,
+          ended_at = EXCLUDED.ended_at,
+          latency_ms = EXCLUDED.latency_ms,
+          response_text = EXCLUDED.response_text,
+          response_json = EXCLUDED.response_json,
+          validated = EXCLUDED.validated,
+          validation_errors = EXCLUDED.validation_errors,
+          error_message = EXCLUDED.error_message
+        RETURNING llm_call_id
+        """,
+        (
+            run_id,
+            document_id,
+            MODEL,
+            PROMPT_VERSION,
+            input_hash,
+            json.dumps({"temperature": 0.0}),
+            status,
+            started,
+            ended,
+            latency_ms,
+            response_text,
+            json.dumps(response_json) if response_json is not None else None,
+            validated,
+            validation_errors,
+            error_message,
+        ),
+    )
+    return str(cur.fetchone()[0])
+
+
 def main() -> int:
-    load_dotenv('.env')
-    
-    
+    load_dotenv(".env")
+
     dsn = build_postgres_db_url(
-        user = os.getenv('POSTGRES_USER'),
-        password = os.getenv('POSTGRES_PASSWORD'),
-        host= os.getenv('POSTGRES_HOST'),
-        port= os.getenv('POSTGRES_PORT'),
-        database= os.getenv('POSTGRES_DB')
+        user=os.getenv("POSTGRES_USER"),
+        password=os.getenv("POSTGRES_PASSWORD"),
+        host=os.getenv("POSTGRES_HOST"),
+        port=os.getenv("POSTGRES_PORT"),
+        database=os.getenv("POSTGRES_DB"),
     )
     if not dsn:
         print("ERROR: DATABASE_URL not set", file=sys.stderr)
@@ -137,20 +249,18 @@ def main() -> int:
             print(f"Run created: run_id={run_id}")
 
             try:
-                # Get documents that have parsed experiences
-                cur.execute(
-                    """
-                    SELECT d.document_id
-                    FROM etl.documents d
-                    WHERE d.status IN ('PARSED','ENRICHED','NEEDS_REVIEW')
-                    ORDER BY d.ingested_at DESC
-                    """
-                )
-                doc_ids = [row[0] for row in cur.fetchall()]
+                doc_ids = select_documents(cur)
                 print(f"Documents to process: {len(doc_ids)}")
 
                 for document_id in doc_ids:
+                    # Skip if attempts exhausted (extra guard)
+                    attempts = count_attempts(cur, document_id)
+                    if attempts >= MAX_DOC_ATTEMPTS:
+                        print(f"Skipping document_id={document_id}: attempts exhausted ({attempts}/{MAX_DOC_ATTEMPTS})")
+                        continue
+
                     print(f"Processing document_id={document_id}")
+
                     cur.execute(
                         """
                         SELECT title, company, employment_type, dates, location
@@ -171,16 +281,20 @@ def main() -> int:
                     ]
                     roles_block = render_roles(roles)
                     prompt = prompt_template.replace("{{ROLES}}", roles_block)
-
                     input_hash = sha256_text(prompt)
 
-                    # Idempotency: skip if already succeeded
+                    # Idempotency: skip if already succeeded+validated
                     cur.execute(
                         """
-                        SELECT llm_call_id, validated
+                        SELECT 1
                         FROM etl.llm_calls
-                        WHERE document_id=%s AND model=%s AND prompt_version=%s AND input_hash_sha256=%s
-                          AND status='SUCCESS' AND validated=true
+                        WHERE document_id=%s
+                          AND model=%s
+                          AND prompt_version=%s
+                          AND input_hash_sha256=%s
+                          AND status='SUCCESS'
+                          AND validated=true
+                        LIMIT 1
                         """,
                         (document_id, MODEL, PROMPT_VERSION, input_hash),
                     )
@@ -188,7 +302,6 @@ def main() -> int:
                         print(f"Skipping document_id={document_id}: already validated")
                         continue
 
-                    # Call Ollama
                     started = datetime.now(timezone.utc)
                     try:
                         print(f"Calling Ollama for document_id={document_id}")
@@ -197,48 +310,53 @@ def main() -> int:
                         latency_ms = int((ended - started).total_seconds() * 1000)
                         print(f"Ollama response received: document_id={document_id} latency_ms={latency_ms}")
 
-                        # Try parse JSON
+                        # Parse + validate
                         validated = False
                         validation_errors = None
                         response_json = None
+                        parsed: Optional[PhDStatus] = None
 
                         try:
                             response_json = json.loads(extract_json_candidate(response_text))
                             parsed = PhDStatus(**response_json)
+                            # Enforce NOT NULL expectation before DB write:
+                            if parsed.is_current_phd is None:
+                                raise ValueError("is_current_phd must be true/false (not null)")
                             validated = True
-                        except Exception as ve:
+                        except (json.JSONDecodeError, ValidationError, ValueError) as ve:
                             validation_errors = str(ve)
+                            validated = False
                             parsed = None
-                            preview = response_text[:500].replace("\n", "\\n")
-                            print(f"Invalid JSON response preview: document_id={document_id} preview='{preview}'")
+                            preview = (response_text or "")[:500].replace("\n", "\\n")
+                            print(
+                                f"Invalid / schema-noncompliant response preview: "
+                                f"document_id={document_id} preview='{preview}'"
+                            )
+
                         print(f"Validation result: document_id={document_id} validated={validated}")
 
-                        # Write llm_calls
-                        cur.execute(
-                            """
-                            INSERT INTO etl.llm_calls(
-                              run_id, document_id, model, prompt_version, input_hash_sha256,
-                              parameters, status, started_at, ended_at, latency_ms,
-                              response_text, response_json, validated, validation_errors
-                            )
-                            VALUES (%s,%s,%s,%s,%s,%s,'SUCCESS',%s,%s,%s,%s,%s,%s,%s)
-                            RETURNING llm_call_id
-                            """,
-                            (
-                                run_id, document_id, MODEL, PROMPT_VERSION, input_hash,
-                                json.dumps({"temperature": 0.0}),
-                                started, ended, latency_ms,
-                                response_text,
-                                json.dumps(response_json) if response_json is not None else None,
-                                validated,
-                                validation_errors,
-                            ),
-                        )
-                        llm_call_id = cur.fetchone()[0]
-                        inserted_llm_call = True
+                        # Store llm_call: invalid output counts as FAILED so retries work
+                        call_status = "SUCCESS" if validated else "FAILED"
+                        call_error_message = None if validated else f"Validation failed: {validation_errors}"
 
-                        # If valid, upsert into core.phd_status
+                        llm_call_id = upsert_llm_call(
+                            cur,
+                            run_id=run_id,
+                            document_id=document_id,
+                            input_hash=input_hash,
+                            started=started,
+                            ended=ended,
+                            latency_ms=latency_ms,
+                            response_text=response_text,
+                            response_json=response_json,
+                            validated=validated,
+                            validation_errors=validation_errors,
+                            status=call_status,
+                            error_message=call_error_message,
+                        )
+
                         if validated and parsed is not None:
+                            # Upsert into core.phd_status (safe: is_current_phd is not None here)
                             cur.execute(
                                 """
                                 INSERT INTO core.phd_status(
@@ -260,74 +378,10 @@ def main() -> int:
                                   updated_at=now()
                                 """,
                                 (
-                                    document_id, run_id, MODEL, PROMPT_VERSION,
-                                    parsed.is_current_phd,
-                                    parsed.current_employer,
-                                    parsed.current_title,
-                                    parsed.since_month,
-                                    parsed.evidence,
-                                    llm_call_id,
-                                ),
-                            )
-
-                            # mark doc enriched
-                            cur.execute(
-                                "UPDATE etl.documents SET status='ENRICHED', error_message=NULL WHERE document_id=%s",
-                                (document_id,),
-                            )
-                            print(f"Document enriched: document_id={document_id}")
-                        else:
-                            # invalid output: needs review
-                            cur.execute(
-                                "UPDATE etl.documents SET status='NEEDS_REVIEW', error_message=%s WHERE document_id=%s",
-                                (f"LLM JSON invalid: {validation_errors}", document_id),
-                            )
-                            print(f"Document needs review: document_id={document_id} error={validation_errors}")
-
-                        conn.commit()
-
-                    except pg_errors.UniqueViolation:
-                        conn.rollback()
-                        print(
-                            f"Duplicate llm_calls entry; reusing existing record for document_id={document_id}"
-                        )
-                        cur.execute(
-                            """
-                            SELECT llm_call_id
-                            FROM etl.llm_calls
-                            WHERE document_id=%s AND model=%s AND prompt_version=%s AND input_hash_sha256=%s
-                            ORDER BY ended_at DESC
-                            LIMIT 1
-                            """,
-                            (document_id, MODEL, PROMPT_VERSION, input_hash),
-                        )
-                        row = cur.fetchone()
-                        if not row:
-                            raise
-                        llm_call_id = row[0]
-                        if validated and parsed is not None:
-                            cur.execute(
-                                """
-                                INSERT INTO core.phd_status(
-                                  document_id, run_id, model, prompt_version,
-                                  is_current_phd, current_employer, current_title, since_month,
-                                  evidence, source_llm_call_id, updated_at
-                                )
-                                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())
-                                ON CONFLICT (document_id) DO UPDATE SET
-                                  run_id=EXCLUDED.run_id,
-                                  model=EXCLUDED.model,
-                                  prompt_version=EXCLUDED.prompt_version,
-                                  is_current_phd=EXCLUDED.is_current_phd,
-                                  current_employer=EXCLUDED.current_employer,
-                                  current_title=EXCLUDED.current_title,
-                                  since_month=EXCLUDED.since_month,
-                                  evidence=EXCLUDED.evidence,
-                                  source_llm_call_id=EXCLUDED.source_llm_call_id,
-                                  updated_at=now()
-                                """,
-                                (
-                                    document_id, run_id, MODEL, PROMPT_VERSION,
+                                    document_id,
+                                    run_id,
+                                    MODEL,
+                                    PROMPT_VERSION,
                                     parsed.is_current_phd,
                                     parsed.current_employer,
                                     parsed.current_title,
@@ -342,50 +396,77 @@ def main() -> int:
                             )
                             print(f"Document enriched: document_id={document_id}")
                         else:
+                            # Mark FAILED so it is eligible for retry (until MAX_DOC_ATTEMPTS)
                             cur.execute(
-                                "UPDATE etl.documents SET status='NEEDS_REVIEW', error_message=%s WHERE document_id=%s",
-                                (f"LLM JSON invalid: {validation_errors}", document_id),
+                                "UPDATE etl.documents SET status='FAILED', error_message=%s WHERE document_id=%s",
+                                (f"LLM output invalid: {validation_errors}", document_id),
                             )
-                            print(f"Document needs review: document_id={document_id} error={validation_errors}")
+                            print(f"Document failed (invalid output): document_id={document_id} error={validation_errors}")
+
                         conn.commit()
 
                     except Exception as e:
+                        # Make sure we can write failure records
                         conn.rollback()
                         ended = datetime.now(timezone.utc)
                         latency_ms = int((ended - started).total_seconds() * 1000)
 
-                        cur.execute(
-                            """
-                            INSERT INTO etl.llm_calls(
-                              run_id, document_id, model, prompt_version, input_hash_sha256,
-                              parameters, status, error_message, started_at, ended_at, latency_ms,
-                              response_text, validated
+                        # Record FAILED call (no ON CONFLICT here; if same hash already exists, we update it)
+                        try:
+                            _ = upsert_llm_call(
+                                cur,
+                                run_id=run_id,
+                                document_id=document_id,
+                                input_hash=input_hash,
+                                started=started,
+                                ended=ended,
+                                latency_ms=latency_ms,
+                                response_text=None,
+                                response_json=None,
+                                validated=False,
+                                validation_errors=None,
+                                status="FAILED",
+                                error_message=str(e),
                             )
-                            VALUES (%s,%s,%s,%s,%s,%s,'FAILED',%s,%s,%s,%s,%s,false)
-                            """,
-                            (
-                                run_id, document_id, MODEL, PROMPT_VERSION, input_hash,
-                                json.dumps({"temperature": 0.0}),
-                                str(e),
-                                started, ended, latency_ms,
-                                None,
-                            ),
-                        )
-                        cur.execute(
-                            "UPDATE etl.documents SET status='FAILED', error_message=%s WHERE document_id=%s",
-                            (str(e), document_id),
-                        )
-                        conn.commit()
-                        print(f"Document failed: document_id={document_id} error={e}", file=sys.stderr)
+                        except Exception as inner:
+                            # If even logging fails, don't kill the whole run; just surface it.
+                            conn.rollback()
+                            print(
+                                f"ERROR: Could not log llm_call failure for document_id={document_id}: {inner}",
+                                file=sys.stderr,
+                            )
 
+                        # Mark document failed
+                        try:
+                            cur.execute(
+                                "UPDATE etl.documents SET status='FAILED', error_message=%s WHERE document_id=%s",
+                                (str(e), document_id),
+                            )
+                            conn.commit()
+                        except Exception as inner2:
+                            conn.rollback()
+                            print(
+                                f"ERROR: Could not update etl.documents to FAILED for document_id={document_id}: {inner2}",
+                                file=sys.stderr,
+                            )
+
+                        print(f"Document failed: document_id={document_id} error={e}", file=sys.stderr)
+                        continue  # do not abort the whole run on a single doc
+
+                # run success even if some docs failed; failures are tracked per-doc
                 finish_run(cur, run_id, "SUCCESS", None)
                 conn.commit()
                 print(f"✅ LLM enrichment completed: run_id={run_id}")
                 return 0
 
             except Exception as e:
-                finish_run(cur, run_id, "FAILED", str(e))
-                conn.commit()
+                # The run-level failure handler MUST rollback first, otherwise you get InFailedSqlTransaction
+                conn.rollback()
+                try:
+                    finish_run(cur, run_id, "FAILED", str(e))
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
                 print(f"❌ LLM enrichment failed: run_id={run_id} error={e}", file=sys.stderr)
                 return 1
 

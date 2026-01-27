@@ -34,5 +34,5 @@ models:
     # Config indicated by + and applies to all files under models/example/
     core:
       +materialized: table
-    marts:
-      +materialized: table
+    # marts:
+    #   +materialized: table
