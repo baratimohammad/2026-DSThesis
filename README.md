@@ -1,6 +1,98 @@
+# Project Overview
+
+This repository contains the final thesis project for the Master’s Degree in Digital Skills for Sustainable Societal Transitions at Politecnico di Torino (DAUIN Department).
+
+**Thesis title:** Design of a Containerized Dashboard Platform and AI-Assisted Data Enrichment for Student Career Monitoring
+
+A fully containerized stack that ingests, transforms, enriches, and visualizes academic data to support data-driven monitoring of PhD student careers.
+
+## Table of Contents
+- [Project Overview](#project-overview)
+- [Objective](#objective)
+- [Data Sources](#data-sources)
+- [Architecture](#architecture)
+  - [Architectural Layers](#architectural-layers)
+- [Dashboards](#dashboards)
+- [Project Setup](#project-setup)
+  - [Input Data Requirements](#input-data-requirements)
+  - [Prerequisites](#prerequisites)
+  - [Configuration](#configuration)
+  - [Start Services](#start-services)
+  - [Initialize Database](#initialize-database)
+  - [Data Ingestion](#data-ingestion)
+  - [LLM Enrichment](#llm-enrichment)
+  - [Run dbt commands (from repo root)](#run-dbt-commands-from-repo-root)
+  - [Grafana](#grafana)
+  - [Stop Services](#stop-services)
+
+## Objective
+
+Enable structured, repeatable, and transparent analysis of PhD students’ academic careers to support departmental decision-making. The system answers questions about:
+
+- Academic and professional activities over time
+- Research output and publication trends per PhD cycle
+- Participation in international mobility programs and their durations
+- Collaboration patterns across activities and academic years
+- Supervisors’ publication activity
+- Core information about departmental courses
+
+## Data Sources
+
+- CSV files (structured data)
+- PDFs (unstructured data enriched via AI-assisted extraction)
+
+All data is curated and normalized before analysis.
+
+# Architecture
+
+![High-level architecture](jpg/Architecture.jpg)
+
+*Figure 1 — Containerized, layered data architecture spanning ingestion through presentation.*
+
+The system uses a layered design to separate ingestion, transformation, and presentation. All components run in Docker on Ubuntu.
+
+## Architectural Layers
+### Extraction Layer
+- Python ingestion of CSV and PDF sources
+- Early parsing and validation
+
+### Staging Layer
+- Python services populate the staging schema
+- Ollama enriches unstructured data (AI-assisted extraction)
+- Cleaning, normalization, and schema alignment
+
+### Data Warehouse Layer
+- dbt builds the core schema
+- Business logic produces analytics-ready tables
+
+### Data Mart Layer
+- dbt publishes marts optimized for dashboards
+- Organized by analytical domain (careers, publications, mobility, etc.)
+
+### Data Serving Layer
+- Grafana dashboards with filters for cycle, year, course, and mobility duration
+
+### Storage Layer
+- PostgreSQL underpins staging, warehouse, and mart schemas
+
+### Containerization & Execution Model
+- All services run in Docker (Ubuntu-based images)
+- Version-controlled for reproducible builds
+- Designed for annual runs with curated source files following the documented formats
+
+
+# Dashboards
+Example dashboards produced by the platform:
+- ![Distribuzione delle ore](jpg/sample_distribuzione_delle_ore.png)
+- ![Iscritti vs superati](jpg/sample_iscritti_superati.png)
+- ![Mobilità internazionale](jpg/sample_mobilita_internazionale.png)
+- ![Ore di formazione](jpg/sample_ore_formazione.png)
+- ![Pubblicazioni](jpg/sample_pubblicazioni.png)
+
+
 # Project Setup
 
-This repo runs a data pipeline backed by Postgres, Grafana, and Ollama using Docker Compose.
+This repository runs a data pipeline backed by Postgres, Grafana, and Ollama via Docker Compose.
 
 ## Input Data Requirements
 
@@ -28,7 +120,7 @@ data/input/
   mobilita_internazionale_con_studenti.csv
 ```
 
-Each staging loader expects specific columns. Extra columns are ignored, but any column listed below should be present.
+Each staging loader expects specific columns. Extra columns are ignored; all listed columns should be present.
 
 | Input file pattern | Delimiter | Required columns |
 | --- | --- | --- |
@@ -60,23 +152,9 @@ sudo apt-get install -y docker.io docker-compose-plugin
 sudo usermod -aG docker $USER
 ```
 
-macOS (Homebrew):
-
-```
-brew install --cask docker
-```
-
-Windows (winget):
-
-```
-winget install -e --id Docker.DockerDesktop
-```
-
-After installation, start Docker Desktop (macOS/Windows) or log out/in on Linux for the `docker` group change to take effect.
-
 ## Configuration
 
-Create or update `.env` in the project root. Example:
+Create or update `.env` in the project root (example below). Adjust credentials as needed, especially for shared environments.
 
 ```
 POSTGRES_USER=changeadmin
@@ -97,7 +175,7 @@ GRAFANA_ADMIN_PASSWORD=admin
 GRAFANA_PORT=3000
 ```
 
-Create dbt folder and files
+Create dbt profile (`./PhDStudenti/.dbt/profiles.yml`):
 ```
 mkdir -p ./PhDStudenti/.dbt
 
@@ -149,6 +227,8 @@ docker compose run --rm pipeline python scripts/apply_migrations.py
 
 ## Data Ingestion
 
+Run ingestion jobs:
+
 CSV ingestion:
 
 ```
@@ -174,38 +254,37 @@ Run enrichment:
 ```
 docker compose run --rm pipeline python -m pipeline.llm_enrich
 ```
-## Run dbt commands
-From repo root:
 
-### Install dbt packages
-```
-docker compose run --rm dbt deps
-```
-### Validate connection + config
-```
-docker compose run --rm dbt debug
-```
-### Build models
-```
-docker compose run --rm dbt run -s path:models/core/*
-docker compose run --rm dbt dbt run -s models.marts
-```
-### Run tests
-```
-docker compose run --rm dbt dbt test
-```
-
-Data marts modeling
+## Run dbt commands (from repo root)
+- Install packages: `docker compose run --rm dbt deps`
+- Validate connection/config: `docker compose run --rm dbt debug`
+- Build models:
+  - `docker compose run --rm dbt run -s path:models/core/*`
+  - `docker compose run --rm dbt run -s path:models/marts/*`
+- Tests: `docker compose run --rm dbt test`
 
 ## Grafana
 
-Open Grafana in the browser:
+Load the prebuilt dashboards and point them to your Postgres data source:
+
+1) Download the JSON files from [`dashboards_json`](dashboards_json/) to your machine.
+2) Open Grafana at:
 
 ```
 http://localhost:3000
 ```
+3) Add the Postgres data source:
+   - Data sources → Add new → PostgreSQL
+   - Host: `postgres:5432`
+   - Database / User / Password: values from `.env`
+   - TLS: disable unless you set up SSL
+   - Save & Test.
+4) Import dashboards:
+   - Dashboards → New → Import → Upload JSON
+   - Upload each file you downloaded, select the Postgres data source, and click Import.
 
-Default credentials are `admin/admin` unless changed in `.env`. Datasources and dashboards are provisioned from `./Docker/grafana`.
+Notes:
+- Default credentials are `admin/admin` unless changed in `.env`. Datasources and dashboards are provisioned from `./Docker/grafana`.
 
 ## Stop Services
 
