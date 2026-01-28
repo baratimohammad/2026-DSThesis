@@ -92,7 +92,7 @@ The system uses a layered design to separate ingestion, transformation, and pres
 
 ### Data Mart Layer
 - dbt publishes marts optimized for dashboards
-- Organized by analytical domain (careers, publications, mobility, etc.)
+- Organized by analytical domain
 <p align="center">
   <img src="jpg/Warehouse_to_Marts.jpg" alt="Warehouse to Marts" width="820">
 </p>
