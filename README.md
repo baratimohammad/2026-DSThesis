@@ -45,7 +45,9 @@ All data is curated and normalized before analysis.
 
 # Architecture
 
-![High-level architecture](jpg/Architecture.jpg)
+<p align="center">
+  <img src="jpg/Architecture.jpg" alt="High-level architecture" width="820">
+</p>
 
 *Figure 1 — Containerized, layered data architecture spanning ingestion through presentation.*
 
@@ -56,18 +58,46 @@ The system uses a layered design to separate ingestion, transformation, and pres
 - Python ingestion of CSV and PDF sources
 - Early parsing and validation
 
+<p align="center">
+  <img src="jpg/CSV_Lane_Extraction_to_Staging.jpg" alt="CSV Lane - Extraction to Staging" width="820">
+</p>
+
+*Figure 2 — Data extraction to staging enabled by python, in the CSV lane.*
+
+<p align="center">
+  <img src="jpg/LinkedIn_PDF_Deterministic_Extraction_Layer.jpg" alt="LinkedIn PDF Deterministic Extraction Layer" width="820">
+</p>
+
+*Figure 3 — Deterministic PDF data extraction to staging enabled by python, in the PDF lane.*
+
 ### Staging Layer
 - Python services populate the staging schema
 - Ollama enriches unstructured data (AI-assisted extraction)
 - Cleaning, normalization, and schema alignment
 
+<p align="center">
+  <img src="jpg/LinkedIn_Probabilistic_Extraction_Layer_Staging_to_Warehouse.jpg" alt="LinkedIn Probabilistic Extraction Layer - Staging to Warehouse" width="820">
+</p>
+
+*Figure 4 — Probabilistic PDF data extraction to staging enabled by python and ollama, in the PDF lane.*
+
 ### Data Warehouse Layer
 - dbt builds the core schema
 - Business logic produces analytics-ready tables
+<p align="center">
+  <img src="jpg/CSV_Lane_Staging_to_Warehouse.jpg" alt="CSV Lane - Staging to Warehouse" width="820">
+</p>
+
+*Figure 5 — Data transformation from staging schema to core schema enabled by dbt, in the CSV lane.*
 
 ### Data Mart Layer
 - dbt publishes marts optimized for dashboards
 - Organized by analytical domain (careers, publications, mobility, etc.)
+<p align="center">
+  <img src="jpg/Warehouse_to_Marts.jpg" alt="Warehouse to Marts" width="820">
+</p>
+
+*Figure 6 — Data transformation from core schema to marts schema enabled by dbt, for faster queries in analytics in the downstream layers.*
 
 ### Data Serving Layer
 - Grafana dashboards with filters for cycle, year, course, and mobility duration
@@ -83,11 +113,27 @@ The system uses a layered design to separate ingestion, transformation, and pres
 
 # Dashboards
 Example dashboards produced by the platform:
-- ![Distribuzione delle ore](jpg/sample_distribuzione_delle_ore.png)
-- ![Iscritti vs superati](jpg/sample_iscritti_superati.png)
-- ![Mobilità internazionale](jpg/sample_mobilita_internazionale.png)
-- ![Ore di formazione](jpg/sample_ore_formazione.png)
-- ![Pubblicazioni](jpg/sample_pubblicazioni.png)
+
+<p align="center">
+  <img src="jpg/sample_distribuzione_delle_ore.png" alt="Distribuzione delle ore" width="820"><br>
+  <em>Distribuzione delle ore</em>
+</p>
+<p align="center">
+  <img src="jpg/sample_iscritti_superati.png" alt="Iscritti vs superati" width="820"><br>
+  <em>Iscritti vs superati</em>
+</p>
+<p align="center">
+  <img src="jpg/sample_mobilita_internazionale.png" alt="Mobilità internazionale" width="820"><br>
+  <em>Mobilità internazionale</em>
+</p>
+<p align="center">
+  <img src="jpg/sample_ore_formazione.png" alt="Ore di formazione" width="820"><br>
+  <em>Ore di formazione</em>
+</p>
+<p align="center">
+  <img src="jpg/sample_pubblicazioni.png" alt="Pubblicazioni" width="820"><br>
+  <em>Pubblicazioni</em>
+</p>
 
 
 # Project Setup
